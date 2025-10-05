@@ -276,8 +276,12 @@ router.post('/:id/resize', requireAuth, require2FA, async (req, res) => {
 
     const filepath = path.join(uploadDir, matchingFile);
     const allowedFormats = ['jpeg', 'png', 'webp'];
-    const selectedFormat = allowedFormats.includes(format.toLowerCase()) ? format.toLowerCase() : 'png';
-    const extension = selectedFormat === 'jpeg' ? 'jpg' : selectedFormat;
+    const sanitizedFormat = typeof format === 'string' && allowedFormats.includes(format.toLowerCase())
+      ? format.toLowerCase()
+      : 'png';
+    // Strict mapping: don't accept extension from user input
+    const extMap = { jpeg: 'jpg', png: 'png', webp: 'webp' };
+    const extension = extMap[sanitizedFormat];
     const newFilename = `${uuidv4()}.${extension}`;
     const newFilepath = path.join(uploadDir, newFilename);
 
