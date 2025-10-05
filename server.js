@@ -5,7 +5,7 @@ const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const path = require('path');
 require('dotenv').config();
-
+const csrf = require('lusca').csrf;
 const app = express();
 const PORT = process.env.PORT || 9640;
 
@@ -68,6 +68,8 @@ app.use(session({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// CSRF protection middleware
+app.use(csrf());
 // Static file serving for uploads with security headers
 app.use('/images', (req, res, next) => {
   // Add security headers for image serving
