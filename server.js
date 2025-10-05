@@ -73,6 +73,12 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // CSRF protection middleware
 app.use(csrf());
+
+// CSRF token endpoint
+app.get('/api/csrf-token', (req, res) => {
+  res.json({ token: req.csrfToken() });
+});
+
 // Static file serving for uploads with security headers
 app.use('/images', (req, res, next) => {
   // Add security headers for image serving
