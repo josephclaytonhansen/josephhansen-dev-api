@@ -22,9 +22,12 @@ const validateCredentials = async (username, password) => {
   const adminUsername = process.env.ADMIN_USERNAME || 'admin';
   const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH;
   
-  console.log('Login attempt for username:', username);
-  console.log('Expected username:', adminUsername);
-  console.log('Hash configured:', !!adminPasswordHash);
+  // Only log in development
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Login attempt for username:', username);
+    console.log('Expected username:', adminUsername);
+    console.log('Hash configured:', !!adminPasswordHash);
+  }
   
   if (!adminPasswordHash) {
     console.error('❌ Admin password hash not configured in .env file');
@@ -35,8 +38,10 @@ const validateCredentials = async (username, password) => {
   const isValidUsername = username === adminUsername;
   const isValidPassword = await bcrypt.compare(password, adminPasswordHash);
   
-  console.log('Username valid:', isValidUsername);
-  console.log('Password valid:', isValidPassword);
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Username valid:', isValidUsername);
+    console.log('Password valid:', isValidPassword);
+  }
   
   return isValidUsername && isValidPassword;
 };

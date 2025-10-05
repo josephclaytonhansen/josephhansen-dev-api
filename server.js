@@ -11,10 +11,13 @@ const PORT = process.env.PORT || 9640;
 
 // Trust proxy for production deployment (behind reverse proxy/load balancer)
 if (process.env.NODE_ENV === 'production') {
-  app.set('trust proxy', 1); // Trust first proxy
+  // Only trust first proxy for security
+  app.set('trust proxy', 1);
 } else {
-  // For development, you can also enable if testing behind a proxy
-  // app.set('trust proxy', true);
+  // For development, only enable if explicitly needed
+  if (process.env.TRUST_PROXY === 'true') {
+    app.set('trust proxy', true);
+  }
 }
 
 // Security middleware

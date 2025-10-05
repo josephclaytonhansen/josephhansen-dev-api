@@ -56,14 +56,14 @@ router.post('/login', authLimiter, async (req, res) => {
 // GET /api/auth/setup-2fa - Setup 2FA (first time)
 router.get('/setup-2fa', requireAuth, async (req, res) => {
   try {
-    // Check if 2FA is already set up
-    if (req.session.twoFactorSecret) {
+    // Check if 2FA is already configured
+    if (process.env.TOTP_SECRET) {
       return res.status(400).json({ error: '2FA already configured' });
     }
 
     const secret = generate2FASecret(req.session.username);
     
-    // Store secret in session temporarily
+    // Store secret in session temporarily for verification
     req.session.tempTwoFactorSecret = secret.base32;
 
     // Generate QR code
@@ -74,7 +74,7 @@ router.get('/setup-2fa', requireAuth, async (req, res) => {
       secret: secret.base32,
       qrCode: qrCodeUrl,
       manualEntryKey: secret.base32,
-      instructions: 'Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.) and then verify with a token'
+      instructions: 'Scan the QR code with your authenticator app and verify with a token. Once verified, add TOTP_SECRET to your .env file.'
     });
 
   } catch (error) {
@@ -103,15 +103,21 @@ router.post('/verify-2fa-setup', authLimiter, requireAuth, async (req, res) => {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
-    // Save the secret permanently
-    req.session.twoFactorSecret = req.session.tempTwoFactorSecret;
+    // Mark as verified in session
     req.session.twoFactorVerified = true;
-    delete req.session.tempTwoFactorSecret;
-
+    
     res.json({
       success: true,
-      message: '2FA setup completed successfully'
+      message: '2FA setup verified successfully',
+      nextSteps: {
+        instruction: 'Add this line to your .env file to complete setup:',
+        envLine: `TOTP_SECRET=${req.session.tempTwoFactorSecret}`,
+        note: 'Restart the server after adding the TOTP_SECRET to .env'
+      }
     });
+    
+    // Clear temp secret after providing instructions
+    delete req.session.tempTwoFactorSecret;
 
   } catch (error) {
     console.error('2FA verification error:', error);
@@ -129,11 +135,12 @@ router.post('/verify-2fa', authLimiter, requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid token format. Must be 6 digits.' });
     }
 
-    if (!req.session.twoFactorSecret) {
+    const totpSecret = process.env.TOTP_SECRET;
+    if (!totpSecret) {
       return res.status(400).json({ error: '2FA not configured. Please setup 2FA first.' });
     }
 
-    const isValid = verify2FAToken(token, req.session.twoFactorSecret);
+    const isValid = verify2FAToken(token, totpSecret);
 
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid token' });
@@ -156,7 +163,7 @@ router.post('/verify-2fa', authLimiter, requireAuth, async (req, res) => {
 router.get('/status', (req, res) => {
   const isAuthenticated = !!(req.session && req.session.authenticated);
   const is2FAVerified = !!(req.session && req.session.twoFactorVerified);
-  const has2FASetup = !!(req.session && req.session.twoFactorSecret);
+  const has2FASetup = !!process.env.TOTP_SECRET;
 
   res.json({
     authenticated: isAuthenticated,
