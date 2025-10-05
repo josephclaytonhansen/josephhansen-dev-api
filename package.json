@@ -22,7 +22,8 @@
     "qrcode": "^1.5.3",
     "sharp": "^0.32.6",
     "speakeasy": "^2.0.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "lusca": "^1.7.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
