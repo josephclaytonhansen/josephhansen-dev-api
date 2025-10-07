@@ -321,29 +321,29 @@
 
 			// Check authentication status on load
 			window.onload = async function () {
-				await getCsrfToken(); // Get CSRF token first
-				checkAuthStatus();
+				await getCsrfToken() // Get CSRF token first
+				checkAuthStatus()
 			}
 
 			// Global CSRF token
-			let csrfToken = null;
+			let csrfToken = null
 
 			// Get CSRF token
 			async function getCsrfToken() {
 				if (!csrfToken) {
 					try {
-						const response = await fetch('/api/csrf-token', {
-							credentials: 'include'
-						});
+						const response = await fetch("/api/csrf-token", {
+							credentials: "include",
+						})
 						if (response.ok) {
-							const data = await response.json();
-							csrfToken = data.token;
+							const data = await response.json()
+							csrfToken = data.token
 						}
 					} catch (error) {
-						console.error('Failed to get CSRF token:', error);
+						console.error("Failed to get CSRF token:", error)
 					}
 				}
-				return csrfToken;
+				return csrfToken
 			}
 
 			// API Helper
@@ -352,13 +352,13 @@
 					const headers = {
 						"Content-Type": "application/json",
 						...options.headers,
-					};
+					}
 
 					// Add CSRF token for POST, PUT, DELETE requests
-					if (options.method && options.method !== 'GET') {
-						const token = await getCsrfToken();
+					if (options.method && options.method !== "GET") {
+						const token = await getCsrfToken()
 						if (token) {
-							headers['x-csrf-token'] = token;
+							headers["x-csrf-token"] = token
 						}
 					}
 
@@ -370,19 +370,19 @@
 
 					// If CSRF error, retry once with fresh token
 					if (response.status === 403) {
-						const errorData = await response.json().catch(() => ({}));
-						if (errorData.error && errorData.error.includes('CSRF')) {
-							csrfToken = null; // Clear cached token
-							const newToken = await getCsrfToken();
-							if (newToken && options.method && options.method !== 'GET') {
-								headers['x-csrf-token'] = newToken;
+						const errorData = await response.json().catch(() => ({}))
+						if (errorData.error && errorData.error.includes("CSRF")) {
+							csrfToken = null // Clear cached token
+							const newToken = await getCsrfToken()
+							if (newToken && options.method && options.method !== "GET") {
+								headers["x-csrf-token"] = newToken
 								const retryResponse = await fetch(url, {
 									credentials: "include",
 									headers,
 									...options,
-								});
+								})
 								if (retryResponse.ok) {
-									return await retryResponse.json();
+									return await retryResponse.json()
 								}
 							}
 						}

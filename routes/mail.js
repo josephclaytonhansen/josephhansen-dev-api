@@ -14,13 +14,22 @@ const mailLimiter = rateLimit({
 
 // Create transporter
 const createTransporter = () => {
+  const port = parseInt(process.env.SMTP_PORT) || 587;
+  
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: parseInt(process.env.SMTP_PORT) || 587,
-    secure: process.env.SMTP_SECURE === 'true',
+    port: port,
+    // Port 465 uses secure: true (SSL/TLS), port 587 uses secure: false (STARTTLS)
+    secure: port === 465,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
+    },
+    // For port 587, require STARTTLS
+    requireTLS: port === 587,
+    tls: {
+      // Don't fail on invalid certs in development
+      rejectUnauthorized: process.env.NODE_ENV === 'production'
     }
   });
 };
