@@ -71,7 +71,15 @@ app.use(session({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// CSRF protection middleware
+// Import routes
+const mailRoutes = require('./routes/mail');
+const imageRoutes = require('./routes/images');
+const authRoutes = require('./routes/auth');
+
+// Public routes (no CSRF protection needed)
+app.use('/api/mail', mailRoutes);
+
+// CSRF protection middleware (applies to routes below)
 app.use(csrf());
 
 // CSRF token endpoint
@@ -108,13 +116,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Import routes
-const mailRoutes = require('./routes/mail');
-const imageRoutes = require('./routes/images');
-const authRoutes = require('./routes/auth');
-
-// Use routes
-app.use('/api/mail', mailRoutes);
+// Protected routes (CSRF protection applied)
 app.use('/api/images', imageRoutes);
 app.use('/api/auth', authRoutes);
 
