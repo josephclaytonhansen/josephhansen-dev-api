@@ -9,6 +9,8 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.2.2",
+    "@simplewebauthn/server": "^13.2.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -17,13 +19,13 @@
     "express-rate-limit": "^7.1.5",
     "express-session": "^1.17.3",
     "helmet": "^7.1.0",
+    "lusca": "^1.7.0",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.7",
     "qrcode": "^1.5.3",
     "sharp": "^0.32.6",
     "speakeasy": "^2.0.0",
-    "uuid": "^9.0.1",
-    "lusca": "^1.7.0"
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

@@ -75,6 +75,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const mailRoutes = require('./routes/mail');
 const imageRoutes = require('./routes/images');
 const authRoutes = require('./routes/auth');
+const passkeyRoutes = require('./routes/passkey');
 
 // Public routes (no CSRF protection needed)
 app.use('/api/mail', mailRoutes);
@@ -119,6 +120,7 @@ app.get('/', (req, res) => {
 // Protected routes (CSRF protection applied)
 app.use('/api/images', imageRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/passkey', passkeyRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

@@ -85,7 +85,40 @@ const getImageInfo = async (filePath) => {
 };
 
 // POST /api/images/upload - Upload image(s)
-router.post('/upload', requireAuth, require2FA, upload.array('images', 5), async (req, res) => {
+router.post('/upload', requireAuth, require2FA, (req, res, next) => {
+  upload.array('images', 5)(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      // Handle Multer-specific errors with user-friendly messages
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        const maxSize = parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024;
+        const maxSizeMB = (maxSize / (1024 * 1024)).toFixed(0);
+        return res.status(400).json({ 
+          error: `File too large. Maximum file size is ${maxSizeMB}MB per file.` 
+        });
+      }
+      if (err.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ 
+          error: 'Too many files. You can upload a maximum of 5 files at once.' 
+        });
+      }
+      if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+        return res.status(400).json({ 
+          error: 'Unexpected field name. Please use "images" as the field name.' 
+        });
+      }
+      return res.status(400).json({ 
+        error: `Upload error: ${err.message}` 
+      });
+    } else if (err) {
+      // Handle other errors (like file type errors from fileFilter)
+      return res.status(400).json({ 
+        error: err.message || 'Upload failed' 
+      });
+    }
+    // No error, continue to the route handler
+    next();
+  });
+}, async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });

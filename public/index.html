@@ -281,7 +281,11 @@
 					<label for="password">Password:</label>
 					<input type="password" id="password" required />
 				</div>
-				<button onclick="login()">Login</button>
+				<button onclick="login()">Login with Password</button>
+				<div style="text-align: center; margin: 15px 0; color: #666">OR</div>
+				<button onclick="loginWithPasskey()" style="background: #28a745">
+					🔐 Login with Windows Hello / Passkey
+				</button>
 			</div>
 
 			<!-- 2FA Setup -->
@@ -318,6 +322,60 @@
 		<script>
 			let selectedFiles = []
 			let currentImageId = null
+
+			// Import SimpleWebAuthn browser helpers
+			const SimpleWebAuthnBrowser = {
+				startRegistration: async (options) => {
+					return await navigator.credentials.create({
+						publicKey: {
+							...options,
+							challenge: Uint8Array.from(
+								atob(options.challenge.replace(/-/g, "+").replace(/_/g, "/")),
+								(c) => c.charCodeAt(0)
+							),
+							user: {
+								...options.user,
+								id: Uint8Array.from(atob(options.user.id.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
+									c.charCodeAt(0)
+								),
+							},
+							excludeCredentials: options.excludeCredentials?.map((cred) => ({
+								...cred,
+								id: Uint8Array.from(atob(cred.id.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
+									c.charCodeAt(0)
+								),
+							})),
+						},
+					})
+				},
+				startAuthentication: async (options) => {
+					return await navigator.credentials.get({
+						publicKey: {
+							...options,
+							challenge: Uint8Array.from(
+								atob(options.challenge.replace(/-/g, "+").replace(/_/g, "/")),
+								(c) => c.charCodeAt(0)
+							),
+							allowCredentials: options.allowCredentials?.map((cred) => ({
+								...cred,
+								id: Uint8Array.from(atob(cred.id.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
+									c.charCodeAt(0)
+								),
+							})),
+						},
+					})
+				},
+			}
+
+			// Convert ArrayBuffer to base64url
+			function arrayBufferToBase64Url(buffer) {
+				const bytes = new Uint8Array(buffer)
+				let binary = ""
+				for (let i = 0; i < bytes.byteLength; i++) {
+					binary += String.fromCharCode(bytes[i])
+				}
+				return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
+			}
 
 			// Check authentication status on load
 			window.onload = async function () {
@@ -442,6 +500,7 @@
 				document.getElementById("header").style.display = "flex"
 				createAdminInterface()
 				loadImages()
+				loadPasskeys()
 			}
 
 			function hideAll() {
@@ -465,7 +524,20 @@
                         <p>Click here or drag files to upload</p>
                         <input type="file" id="file-input" multiple accept="image/*" style="display: none;">
                     </div>
+                    <p style="color: #666; font-size: 13px; margin: 10px 0 0 0;">
+                        📋 <strong>Upload Limits:</strong> Maximum 5 files per upload | 10MB per file | Supported: JPEG, PNG, GIF, WebP
+                    </p>
                     <button onclick="uploadImages()" id="upload-btn" style="margin-top: 15px;" disabled>Upload Selected Files</button>
+                </div>
+
+                <!-- Passkey Management -->
+                <div class="upload-area" style="margin-top: 20px;">
+                    <h3>🔐 Passkey Management</h3>
+                    <p style="color: #666; font-size: 14px;">Use Windows Hello, Touch ID, or a security key to sign in securely without passwords.</p>
+                    <button onclick="registerPasskey()" style="background: #28a745; margin-bottom: 15px;">
+                        ➕ Register New Passkey
+                    </button>
+                    <div id="passkey-list"></div>
                 </div>
 
                 <!-- Image Grid -->
@@ -491,36 +563,123 @@
                     </div>
                 </div>
 
-                <!-- Resize Modal -->
+                <!-- Resize/Crop Modal -->
                 <div class="modal" id="resize-modal" style="display: none;">
-                    <div class="modal-content">
+                    <div class="modal-content" style="max-width: 900px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                            <h3 style="margin: 0; color: #333;">Resize Image</h3>
+                            <h3 style="margin: 0; color: #333;">✂️ Resize & Crop Image</h3>
                             <span class="modal-close" onclick="closeModal('resize-modal')">&times;</span>
                         </div>
-                        <div class="form-group">
-                            <label for="resize-width">Width:</label>
-                            <input type="number" id="resize-width" placeholder="Leave empty to maintain aspect ratio">
+                        
+                        <!-- Tab Navigation -->
+                        <div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #ddd;">
+                            <button id="resize-tab" onclick="switchResizeTab('resize')" style="padding: 10px 20px; border: none; background: #007acc; color: white; border-radius: 4px 4px 0 0; cursor: pointer;">
+                                📐 Resize
+                            </button>
+                            <button id="crop-tab" onclick="switchResizeTab('crop')" style="padding: 10px 20px; border: none; background: #f5f5f5; color: #666; border-radius: 4px 4px 0 0; cursor: pointer;">
+                                ✂️ Crop
+                            </button>
                         </div>
-                        <div class="form-group">
-                            <label for="resize-height">Height:</label>
-                            <input type="number" id="resize-height" placeholder="Leave empty to maintain aspect ratio">
+
+                        <!-- Resize Panel -->
+                        <div id="resize-panel" style="display: block;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                                <!-- Settings -->
+                                <div>
+                                    <h4 style="margin-top: 0;">Resize Settings</h4>
+                                    <div class="form-group">
+                                        <label for="resize-width">Width (px):</label>
+                                        <input type="number" id="resize-width" placeholder="Leave empty for auto" oninput="updateResizePreview()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="resize-height">Height (px):</label>
+                                        <input type="number" id="resize-height" placeholder="Leave empty for auto" oninput="updateResizePreview()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            <input type="checkbox" id="maintain-aspect" checked onchange="updateResizePreview()">
+                                            Maintain aspect ratio
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="resize-quality">Quality (1-100):</label>
+                                        <input type="range" id="resize-quality" value="90" min="1" max="100" oninput="document.getElementById('quality-value').textContent = this.value; updateResizePreview()">
+                                        <span id="quality-value">90</span>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="resize-format">Output Format:</label>
+                                        <select id="resize-format" onchange="updateResizePreview()">
+                                            <option value="png">PNG (lossless)</option>
+                                            <option value="jpeg">JPEG (smaller)</option>
+                                            <option value="webp">WebP (best)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <!-- Preview -->
+                                <div>
+                                    <h4 style="margin-top: 0;">Preview</h4>
+                                    <div id="resize-preview-container" style="border: 2px dashed #ddd; border-radius: 4px; padding: 10px; min-height: 250px; display: flex; align-items: center; justify-content: center; background: #f9f9f9;">
+                                        <img id="resize-preview-image" src="" alt="Preview" style="max-width: 100%; max-height: 300px; object-fit: contain; display: none;">
+                                        <p id="resize-preview-text" style="color: #999;">Preview will appear here</p>
+                                    </div>
+                                    <div id="resize-info" style="margin-top: 10px; font-size: 13px; color: #666;"></div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label for="resize-quality">Quality (1-100):</label>
-                            <input type="number" id="resize-quality" value="90" min="1" max="100">
+
+                        <!-- Crop Panel -->
+                        <div id="crop-panel" style="display: none;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                                <!-- Settings -->
+                                <div>
+                                    <h4 style="margin-top: 0;">Crop Settings</h4>
+                                    <div class="form-group">
+                                        <label>Aspect Ratio:</label>
+                                        <select id="crop-aspect" onchange="updateCropAspect()">
+                                            <option value="free">Free Form</option>
+                                            <option value="1">1:1 (Square)</option>
+                                            <option value="1.333">4:3</option>
+                                            <option value="1.777">16:9</option>
+                                            <option value="0.5625">9:16 (Portrait)</option>
+                                            <option value="1.5">3:2</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="crop-width">Crop Width (px):</label>
+                                        <input type="number" id="crop-width" readonly style="background: #f5f5f5;">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="crop-height">Crop Height (px):</label>
+                                        <input type="number" id="crop-height" readonly style="background: #f5f5f5;">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="crop-x">Position X:</label>
+                                        <input type="number" id="crop-x" readonly style="background: #f5f5f5;">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="crop-y">Position Y:</label>
+                                        <input type="number" id="crop-y" readonly style="background: #f5f5f5;">
+                                    </div>
+                                    <p style="font-size: 13px; color: #666;">
+                                        💡 Drag on the image to select crop area
+                                    </p>
+                                </div>
+                                
+                                <!-- Crop Canvas -->
+                                <div>
+                                    <h4 style="margin-top: 0;">Select Crop Area</h4>
+                                    <div id="crop-container" style="position: relative; border: 2px solid #ddd; border-radius: 4px; overflow: hidden; background: #f9f9f9; min-height: 300px; display: flex; align-items: center; justify-content: center;">
+                                        <canvas id="crop-canvas" style="max-width: 100%; max-height: 400px; cursor: crosshair;"></canvas>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label for="resize-format">Output Format:</label>
-                            <select id="resize-format">
-                                <option value="png" selected>PNG</option>
-                                <option value="jpeg">JPEG</option>
-                                <option value="webp">WebP</option>
-                            </select>
-                        </div>
-                        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+
+                        <!-- Action Buttons -->
+                        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
                             <button onclick="closeModal('resize-modal')" style="background: #6c757d;">Cancel</button>
-                            <button onclick="performResize()">Resize</button>
+                            <button onclick="performResizeOrCrop()" style="background: #007acc;">Apply Changes</button>
                         </div>
                     </div>
                 </div>
@@ -582,6 +741,143 @@
 					})
 
 					checkAuthStatus()
+				} catch (error) {
+					// Error already shown by apiCall
+				}
+			}
+
+			// Passkey Login
+			async function loginWithPasskey() {
+				try {
+					const username = document.getElementById("username").value || "admin"
+
+					showAlert("Touch your security key or use Windows Hello...", "info")
+
+					// Get authentication options from server
+					const options = await apiCall("/api/passkey/auth/options", {
+						method: "POST",
+						body: JSON.stringify({ username }),
+					})
+
+					// Start authentication
+					const credential = await SimpleWebAuthnBrowser.startAuthentication(options)
+
+					// Format response
+					const authResponse = {
+						id: credential.id,
+						rawId: arrayBufferToBase64Url(credential.rawId),
+						type: credential.type,
+						response: {
+							authenticatorData: arrayBufferToBase64Url(credential.response.authenticatorData),
+							clientDataJSON: arrayBufferToBase64Url(credential.response.clientDataJSON),
+							signature: arrayBufferToBase64Url(credential.response.signature),
+							userHandle: credential.response.userHandle
+								? arrayBufferToBase64Url(credential.response.userHandle)
+								: undefined,
+						},
+						username,
+					}
+
+					// Verify authentication
+					await apiCall("/api/passkey/auth/verify", {
+						method: "POST",
+						body: JSON.stringify(authResponse),
+					})
+
+					showAlert("Login successful!", "success")
+					checkAuthStatus()
+				} catch (error) {
+					if (error.name === "NotAllowedError") {
+						showAlert("Authentication cancelled or failed", "error")
+					} else {
+						showAlert(error.message || "Passkey login failed", "error")
+					}
+				}
+			}
+
+			// Register new passkey
+			async function registerPasskey() {
+				try {
+					showAlert("Touch your security key or use Windows Hello...", "info")
+
+					// Get registration options from server
+					const options = await apiCall("/api/passkey/register/options", {
+						method: "POST",
+					})
+
+					// Start registration
+					const credential = await SimpleWebAuthnBrowser.startRegistration(options)
+
+					// Format response
+					const regResponse = {
+						id: credential.id,
+						rawId: arrayBufferToBase64Url(credential.rawId),
+						type: credential.type,
+						response: {
+							attestationObject: arrayBufferToBase64Url(credential.response.attestationObject),
+							clientDataJSON: arrayBufferToBase64Url(credential.response.clientDataJSON),
+						},
+						transports: credential.response.getTransports ? credential.response.getTransports() : [],
+					}
+
+					// Verify registration
+					await apiCall("/api/passkey/register/verify", {
+						method: "POST",
+						body: JSON.stringify(regResponse),
+					})
+
+					showAlert("Passkey registered successfully! You can now use it to log in.", "success")
+					loadPasskeys()
+				} catch (error) {
+					if (error.name === "NotAllowedError") {
+						showAlert("Registration cancelled or failed", "error")
+					} else {
+						showAlert(error.message || "Passkey registration failed", "error")
+					}
+				}
+			}
+
+			// Load user's passkeys
+			async function loadPasskeys() {
+				try {
+					const response = await apiCall("/api/passkey/list")
+					const passkeyList = document.getElementById("passkey-list")
+
+					if (!passkeyList) return
+
+					if (response.passkeys.length === 0) {
+						passkeyList.innerHTML = '<p style="color: #666;">No passkeys registered yet.</p>'
+					} else {
+						passkeyList.innerHTML = response.passkeys
+							.map(
+								(passkey) => `
+							<div style="background: white; padding: 15px; margin: 10px 0; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+								<div>
+									<strong>${passkey.name}</strong><br>
+									<small style="color: #666;">Created: ${new Date(passkey.createdAt).toLocaleDateString()}</small>
+								</div>
+								<button onclick="deletePasskey('${passkey.id}')" style="background: #dc3545;">Remove</button>
+							</div>
+						`
+							)
+							.join("")
+					}
+				} catch (error) {
+					console.error("Failed to load passkeys:", error)
+				}
+			}
+
+			// Delete a passkey
+			async function deletePasskey(passkeyId) {
+				if (!confirm("Are you sure you want to remove this passkey?")) return
+
+				try {
+					await apiCall(`/api/passkey/${passkeyId}`, {
+						method: "DELETE",
+					})
+
+					showAlert("Passkey removed successfully", "success")
+					loadPasskeys()
 				} catch (error) {
 					// Error already shown by apiCall
 				}
@@ -651,17 +947,70 @@
 
 			function updateUploadButton() {
 				const btn = document.getElementById("upload-btn")
+				const MAX_FILES = 5
+				const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+
 				if (selectedFiles.length > 0) {
 					btn.disabled = false
-					btn.textContent = `Upload ${selectedFiles.length} file(s)`
+
+					// Check for issues
+					let warning = ""
+					if (selectedFiles.length > MAX_FILES) {
+						warning = ` ⚠️ Too many files (max ${MAX_FILES})`
+						btn.style.background = "#ffc107" // Yellow warning
+					} else {
+						const oversizedFiles = selectedFiles.filter((f) => f.size > MAX_FILE_SIZE)
+						if (oversizedFiles.length > 0) {
+							warning = ` ⚠️ ${oversizedFiles.length} file(s) too large`
+							btn.style.background = "#ffc107" // Yellow warning
+						} else {
+							btn.style.background = "#007acc" // Normal blue
+						}
+					}
+
+					btn.textContent = `Upload ${selectedFiles.length} file(s)${warning}`
 				} else {
 					btn.disabled = true
 					btn.textContent = "Upload Selected Files"
+					btn.style.background = "#ccc" // Disabled gray
 				}
 			}
 
 			async function uploadImages() {
 				if (selectedFiles.length === 0) return
+
+				// Client-side validation
+				const MAX_FILES = 5
+				const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+				const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+				// Check file count
+				if (selectedFiles.length > MAX_FILES) {
+					showAlert(`Too many files selected. Maximum ${MAX_FILES} files allowed per upload.`, "error")
+					return
+				}
+
+				// Check each file
+				for (const file of selectedFiles) {
+					// Check file size
+					if (file.size > MAX_FILE_SIZE) {
+						const sizeMB = (file.size / (1024 * 1024)).toFixed(1)
+						showAlert(
+							`File "${file.name}" is too large (${sizeMB}MB). Maximum size is 10MB per file.`,
+							"error"
+						)
+						return
+					}
+
+					// Check file type
+					if (!ALLOWED_TYPES.includes(file.type)) {
+						showAlert(
+							`File "${file.name}" has an unsupported format. Only JPEG, PNG, GIF, and WebP are allowed.`,
+							"error"
+						)
+						return
+					}
+				}
 
 				const formData = new FormData()
 				selectedFiles.forEach((file) => {
@@ -853,10 +1202,18 @@
 				document.getElementById("image-preview-modal").style.display = "flex"
 			}
 
+			// Resize/Crop Modal State
+			let currentResizeTab = "resize"
+			let cropData = { x: 0, y: 0, width: 0, height: 0 }
+			let cropCanvas, cropCtx, cropImage
+			let isDragging = false
+			let startX, startY
+			let originalImageData = null
+
 			function resizeCurrentImage() {
 				if (currentPreviewImage) {
 					closeModal("image-preview-modal")
-					resizeImage(currentPreviewImage.id)
+					resizeImage(currentPreviewImage.id, currentPreviewImage.url)
 				}
 			}
 
@@ -867,19 +1224,291 @@
 				}
 			}
 
-			function resizeImage(imageId) {
+			function switchResizeTab(tab) {
+				currentResizeTab = tab
+
+				// Update tab buttons
+				document.getElementById("resize-tab").style.background = tab === "resize" ? "#007acc" : "#f5f5f5"
+				document.getElementById("resize-tab").style.color = tab === "resize" ? "white" : "#666"
+				document.getElementById("crop-tab").style.background = tab === "crop" ? "#007acc" : "#f5f5f5"
+				document.getElementById("crop-tab").style.color = tab === "crop" ? "white" : "#666"
+
+				// Show/hide panels
+				document.getElementById("resize-panel").style.display = tab === "resize" ? "block" : "none"
+				document.getElementById("crop-panel").style.display = tab === "crop" ? "block" : "none"
+
+				if (tab === "crop") {
+					initCropCanvas()
+				}
+			}
+
+			function resizeImage(imageId, imageUrl) {
 				currentImageId = imageId
-				// Clear previous values
+				currentResizeTab = "resize"
+
+				// Reset form
 				document.getElementById("resize-width").value = ""
 				document.getElementById("resize-height").value = ""
 				document.getElementById("resize-quality").value = "90"
+				document.getElementById("quality-value").textContent = "90"
 				document.getElementById("resize-format").value = "png"
-				document.getElementById("resize-modal").classList.remove("hidden")
+				document.getElementById("maintain-aspect").checked = true
+
+				// Load image for preview
+				const img = new Image()
+				img.crossOrigin = "anonymous"
+				img.onload = function () {
+					originalImageData = { width: img.naturalWidth, height: img.naturalHeight, url: imageUrl }
+					document.getElementById("resize-preview-image").src = imageUrl
+					document.getElementById("resize-preview-image").style.display = "block"
+					document.getElementById("resize-preview-text").style.display = "none"
+					updateResizePreview()
+
+					// Initialize crop canvas
+					cropImage = img
+				}
+				img.src = imageUrl
+
+				// Show modal
+				switchResizeTab("resize")
+				document.getElementById("resize-modal").style.display = "flex"
+			}
+
+			function updateResizePreview() {
+				if (!originalImageData) return
+
+				const width = parseInt(document.getElementById("resize-width").value) || null
+				const height = parseInt(document.getElementById("resize-height").value) || null
+				const maintainAspect = document.getElementById("maintain-aspect").checked
+
+				let displayWidth, displayHeight
+
+				if (width && height) {
+					displayWidth = width
+					displayHeight = height
+				} else if (width) {
+					displayWidth = width
+					displayHeight = maintainAspect
+						? Math.round(width * (originalImageData.height / originalImageData.width))
+						: originalImageData.height
+				} else if (height) {
+					displayHeight = height
+					displayWidth = maintainAspect
+						? Math.round(height * (originalImageData.width / originalImageData.height))
+						: originalImageData.width
+				} else {
+					displayWidth = originalImageData.width
+					displayHeight = originalImageData.height
+				}
+
+				// Update info
+				const format = document.getElementById("resize-format").value.toUpperCase()
+				const quality = document.getElementById("resize-quality").value
+				const estimatedSize = Math.round((displayWidth * displayHeight * 3 * (quality / 100)) / 1024)
+
+				document.getElementById("resize-info").innerHTML = `
+					<strong>Original:</strong> ${originalImageData.width} × ${originalImageData.height}px<br>
+					<strong>New Size:</strong> ${displayWidth} × ${displayHeight}px<br>
+					<strong>Format:</strong> ${format} @ ${quality}% quality<br>
+					<strong>Est. Size:</strong> ~${estimatedSize}KB
+				`
+			}
+
+			function initCropCanvas() {
+				if (!cropImage) return
+
+				cropCanvas = document.getElementById("crop-canvas")
+				cropCtx = cropCanvas.getContext("2d")
+
+				// Set canvas size to fit image
+				const maxWidth = 380
+				const maxHeight = 400
+				const imgRatio = cropImage.width / cropImage.height
+
+				let canvasWidth, canvasHeight
+				if (imgRatio > maxWidth / maxHeight) {
+					canvasWidth = maxWidth
+					canvasHeight = maxWidth / imgRatio
+				} else {
+					canvasHeight = maxHeight
+					canvasWidth = maxHeight * imgRatio
+				}
+
+				cropCanvas.width = canvasWidth
+				cropCanvas.height = canvasHeight
+
+				// Draw image
+				cropCtx.drawImage(cropImage, 0, 0, canvasWidth, canvasHeight)
+
+				// Initialize crop area (center 80%)
+				const margin = 0.1
+				cropData = {
+					x: canvasWidth * margin,
+					y: canvasHeight * margin,
+					width: canvasWidth * (1 - 2 * margin),
+					height: canvasHeight * (1 - 2 * margin),
+				}
+
+				drawCropOverlay()
+
+				// Add event listeners
+				cropCanvas.onmousedown = startCrop
+				cropCanvas.onmousemove = updateCrop
+				cropCanvas.onmouseup = endCrop
+				cropCanvas.onmouseleave = endCrop
+			}
+
+			function startCrop(e) {
+				const rect = cropCanvas.getBoundingClientRect()
+				startX = e.clientX - rect.left
+				startY = e.clientY - rect.top
+				isDragging = true
+
+				cropData.x = startX
+				cropData.y = startY
+				cropData.width = 0
+				cropData.height = 0
+			}
+
+			function updateCrop(e) {
+				if (!isDragging) return
+
+				const rect = cropCanvas.getBoundingClientRect()
+				const currentX = e.clientX - rect.left
+				const currentY = e.clientY - rect.top
+
+				cropData.width = currentX - startX
+				cropData.height = currentY - startY
+
+				// Handle negative dimensions
+				if (cropData.width < 0) {
+					cropData.x = currentX
+					cropData.width = Math.abs(cropData.width)
+				} else {
+					cropData.x = startX
+				}
+
+				if (cropData.height < 0) {
+					cropData.y = currentY
+					cropData.height = Math.abs(cropData.height)
+				} else {
+					cropData.y = startY
+				}
+
+				// Apply aspect ratio if selected
+				const aspectSelect = document.getElementById("crop-aspect")
+				if (aspectSelect.value !== "free") {
+					const aspectRatio = parseFloat(aspectSelect.value)
+					cropData.height = cropData.width / aspectRatio
+				}
+
+				drawCropOverlay()
+			}
+
+			function endCrop() {
+				isDragging = false
+				updateCropInfo()
+			}
+
+			function drawCropOverlay() {
+				// Redraw image
+				cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height)
+				cropCtx.drawImage(cropImage, 0, 0, cropCanvas.width, cropCanvas.height)
+
+				// Draw darkened overlay
+				cropCtx.fillStyle = "rgba(0, 0, 0, 0.5)"
+				cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height)
+
+				// Clear crop area
+				cropCtx.clearRect(cropData.x, cropData.y, cropData.width, cropData.height)
+				cropCtx.drawImage(cropImage, 0, 0, cropCanvas.width, cropCanvas.height)
+				cropCtx.fillStyle = "rgba(0, 0, 0, 0.5)"
+				cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height)
+				cropCtx.clearRect(cropData.x, cropData.y, cropData.width, cropData.height)
+
+				// Redraw just the crop area
+				const scaleX = cropImage.width / cropCanvas.width
+				const scaleY = cropImage.height / cropCanvas.height
+				cropCtx.drawImage(
+					cropImage,
+					cropData.x * scaleX,
+					cropData.y * scaleY,
+					cropData.width * scaleX,
+					cropData.height * scaleY,
+					cropData.x,
+					cropData.y,
+					cropData.width,
+					cropData.height
+				)
+
+				// Draw crop box
+				cropCtx.strokeStyle = "#007acc"
+				cropCtx.lineWidth = 2
+				cropCtx.strokeRect(cropData.x, cropData.y, cropData.width, cropData.height)
+
+				// Draw corner handles
+				const handleSize = 8
+				cropCtx.fillStyle = "#007acc"
+				cropCtx.fillRect(cropData.x - handleSize / 2, cropData.y - handleSize / 2, handleSize, handleSize)
+				cropCtx.fillRect(
+					cropData.x + cropData.width - handleSize / 2,
+					cropData.y - handleSize / 2,
+					handleSize,
+					handleSize
+				)
+				cropCtx.fillRect(
+					cropData.x - handleSize / 2,
+					cropData.y + cropData.height - handleSize / 2,
+					handleSize,
+					handleSize
+				)
+				cropCtx.fillRect(
+					cropData.x + cropData.width - handleSize / 2,
+					cropData.y + cropData.height - handleSize / 2,
+					handleSize,
+					handleSize
+				)
+			}
+
+			function updateCropAspect() {
+				if (cropData.width > 0) {
+					const aspectSelect = document.getElementById("crop-aspect")
+					if (aspectSelect.value !== "free") {
+						const aspectRatio = parseFloat(aspectSelect.value)
+						cropData.height = cropData.width / aspectRatio
+						drawCropOverlay()
+					}
+				}
+			}
+
+			function updateCropInfo() {
+				if (!cropCanvas) return
+
+				const scaleX = cropImage.width / cropCanvas.width
+				const scaleY = cropImage.height / cropCanvas.height
+
+				const actualX = Math.round(cropData.x * scaleX)
+				const actualY = Math.round(cropData.y * scaleY)
+				const actualWidth = Math.round(cropData.width * scaleX)
+				const actualHeight = Math.round(cropData.height * scaleY)
+
+				document.getElementById("crop-x").value = actualX
+				document.getElementById("crop-y").value = actualY
+				document.getElementById("crop-width").value = actualWidth
+				document.getElementById("crop-height").value = actualHeight
+			}
+
+			async function performResizeOrCrop() {
+				if (currentResizeTab === "resize") {
+					await performResize()
+				} else {
+					await performCrop()
+				}
 			}
 
 			async function performResize() {
-				const width = document.getElementById("resize-width").value
-				const height = document.getElementById("resize-height").value
+				const width = document.getElementById("resize-width").value || null
+				const height = document.getElementById("resize-height").value || null
 				const quality = document.getElementById("resize-quality").value
 				const format = document.getElementById("resize-format").value
 
@@ -895,6 +1524,34 @@
 					})
 
 					showAlert("Image resized successfully!", "success")
+					closeModal("resize-modal")
+					loadImages()
+				} catch (error) {
+					// Error already shown by apiCall
+				}
+			}
+
+			async function performCrop() {
+				if (!cropData.width || !cropData.height) {
+					showAlert("Please select a crop area", "error")
+					return
+				}
+
+				const scaleX = cropImage.width / cropCanvas.width
+				const scaleY = cropImage.height / cropCanvas.height
+
+				const left = Math.round(cropData.x * scaleX)
+				const top = Math.round(cropData.y * scaleY)
+				const width = Math.round(cropData.width * scaleX)
+				const height = Math.round(cropData.height * scaleY)
+
+				try {
+					const response = await apiCall(`/api/images/${currentImageId}/crop`, {
+						method: "POST",
+						body: JSON.stringify({ left, top, width, height }),
+					})
+
+					showAlert("Image cropped successfully!", "success")
 					closeModal("resize-modal")
 					loadImages()
 				} catch (error) {
@@ -946,14 +1603,14 @@
 			document.addEventListener("keypress", function (e) {
 				if (e.key === "Enter") {
 					const loginForm = document.getElementById("login-form")
-					const verify2FA = document.getElementById("verify-2fa")
-					const setup2FA = document.getElementById("setup-2fa")
+					const verify2FAForm = document.getElementById("verify-2fa")
+					const setup2FAForm = document.getElementById("setup-2fa")
 
 					if (loginForm && loginForm.style.display !== "none") {
 						login()
-					} else if (verify2FA && verify2FA.style.display !== "none") {
+					} else if (verify2FAForm && verify2FAForm.style.display !== "none") {
 						verify2FA()
-					} else if (setup2FA && setup2FA.style.display !== "none") {
+					} else if (setup2FAForm && setup2FAForm.style.display !== "none") {
 						verifySetup()
 					}
 				}
