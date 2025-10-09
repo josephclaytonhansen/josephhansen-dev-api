@@ -669,9 +669,19 @@
 				})
 
 				try {
+					// Get CSRF token
+					const token = await getCsrfToken()
+
+					if (!token) {
+						throw new Error("Unable to get security token. Please refresh the page.")
+					}
+
 					const response = await fetch("/api/images/upload", {
 						method: "POST",
 						credentials: "include",
+						headers: {
+							"x-csrf-token": token,
+						},
 						body: formData,
 					})
 
