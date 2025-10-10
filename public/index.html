@@ -712,7 +712,12 @@
 			// Passkey Login
 			async function loginWithPasskey() {
 				try {
-					const username = document.getElementById("username").value || "admin"
+					const username = document.getElementById("username").value
+
+					if (!username) {
+						showAlert("Please enter your username first", "error")
+						return
+					}
 
 					showAlert("Touch your security key or use Windows Hello...", "info")
 

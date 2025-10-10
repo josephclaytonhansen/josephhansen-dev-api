@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
 const {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -8,8 +10,75 @@ const {
 } = require('@simplewebauthn/server');
 const { isoUint8Array, isoBase64URL } = require('@simplewebauthn/server/helpers');
 
-// In-memory storage for passkey credentials (in production, use a database)
-const userPasskeys = new Map();
+// Passkey storage file
+const PASSKEY_FILE = path.join(__dirname, '..', 'data', 'passkeys.json');
+
+// Ensure data directory exists
+const dataDir = path.dirname(PASSKEY_FILE);
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+// Load passkeys from file
+function loadPasskeys() {
+  try {
+    if (fs.existsSync(PASSKEY_FILE)) {
+      const data = fs.readFileSync(PASSKEY_FILE, 'utf8');
+      const parsed = JSON.parse(data);
+      const map = new Map();
+      
+      // Convert stored base64url strings back to Buffers
+      for (const [username, credentials] of Object.entries(parsed)) {
+        map.set(username, credentials.map(cred => {
+          // Store IDs as base64url strings, not Buffers - SimpleWebAuthn expects strings
+          return {
+            id: cred.id, // Keep as base64url string
+            publicKey: isoBase64URL.toBuffer(cred.publicKey),
+            counter: cred.counter,
+            transports: cred.transports,
+            deviceType: cred.deviceType,
+            backedUp: cred.backedUp,
+            createdAt: cred.createdAt,
+          };
+        }));
+      }
+      
+      console.log(`📂 Loaded passkeys for ${map.size} user(s)`);
+      return map;
+    }
+  } catch (error) {
+    console.error('Error loading passkeys:', error);
+  }
+  return new Map();
+}
+
+// Save passkeys to file
+function savePasskeys() {
+  try {
+    const obj = {};
+    
+    // Convert Buffers to base64url strings for JSON storage
+    for (const [username, credentials] of userPasskeys.entries()) {
+      obj[username] = credentials.map(cred => ({
+        id: cred.id, // Already a base64url string
+        publicKey: isoBase64URL.fromBuffer(cred.publicKey),
+        counter: cred.counter,
+        transports: cred.transports,
+        deviceType: cred.deviceType,
+        backedUp: cred.backedUp,
+        createdAt: cred.createdAt,
+      }));
+    }
+    
+    fs.writeFileSync(PASSKEY_FILE, JSON.stringify(obj, null, 2), 'utf8');
+    console.log(`💾 Saved passkeys for ${userPasskeys.size} user(s)`);
+  } catch (error) {
+    console.error('Error saving passkeys:', error);
+  }
+}
+
+// In-memory storage for passkey credentials (persisted to file)
+const userPasskeys = loadPasskeys();
 const challenges = new Map();
 
 // Configuration
@@ -49,6 +118,7 @@ router.post('/register/options', async (req, res) => {
       // Don't prompt users for additional information about the authenticator
       attestationType: 'none',
       // Prevent users from re-registering existing authenticators
+      // IDs are already base64url strings
       excludeCredentials: userCredentials.map(cred => ({
         id: cred.id,
         type: 'public-key',
@@ -105,13 +175,19 @@ router.post('/register/verify', async (req, res) => {
     if (verified && registrationInfo) {
       const { credential, credentialDeviceType, credentialBackedUp } = registrationInfo;
 
+      console.log('Credential from verification:', {
+        id: credential.id,
+        idType: credential.id.constructor.name,
+        publicKeyType: credential.publicKey.constructor.name
+      });
+
       // Get or create user's passkey list
       const userCredentials = userPasskeys.get(username) || [];
       
-      // Add new passkey (using properties from credential)
+      // credential.id is already a base64url string, credential.publicKey is Uint8Array
       const newPasskey = {
-        id: credential.id,
-        publicKey: credential.publicKey,
+        id: credential.id, // Already base64url string
+        publicKey: Buffer.from(credential.publicKey),
         counter: credential.counter,
         transports: credential.transports || [],
         deviceType: credentialDeviceType,
@@ -121,6 +197,9 @@ router.post('/register/verify', async (req, res) => {
 
       userCredentials.push(newPasskey);
       userPasskeys.set(username, userCredentials);
+
+      // Save to file
+      savePasskeys();
 
       // Clear challenge
       challenges.delete(username);
@@ -144,7 +223,11 @@ router.post('/register/verify', async (req, res) => {
 router.post('/auth/options', async (req, res) => {
   try {
     const username = req.body.username || 'admin';
+    console.log(`🔍 Looking for passkeys for user: ${username}`);
+    console.log(`📋 All registered users with passkeys:`, Array.from(userPasskeys.keys()));
+    
     const userCredentials = userPasskeys.get(username) || [];
+    console.log(`🔑 Found ${userCredentials.length} passkey(s) for ${username}`);
 
     if (userCredentials.length === 0) {
       return res.status(404).json({ error: 'No passkeys registered for this user' });
@@ -152,6 +235,7 @@ router.post('/auth/options', async (req, res) => {
 
     const options = await generateAuthenticationOptions({
       rpID,
+      // IDs are already base64url strings
       allowCredentials: userCredentials.map(cred => ({
         id: cred.id,
         type: 'public-key',
@@ -183,13 +267,15 @@ router.post('/auth/verify', async (req, res) => {
     const userCredentials = userPasskeys.get(username) || [];
     const credentialID = req.body.id;
     
-    const passkey = userCredentials.find(cred => 
-      Buffer.from(cred.id).toString('base64url') === credentialID
-    );
+    // Find the passkey by comparing credential IDs (both are base64url strings)
+    const passkey = userCredentials.find(cred => cred.id === credentialID);
 
     if (!passkey) {
+      console.log('❌ Passkey not found - credential ID mismatch');
       return res.status(404).json({ error: 'Passkey not found' });
     }
+
+    console.log('✓ Found matching passkey, verifying...');
 
     const verification = await verifyAuthenticationResponse({
       response: req.body,
@@ -197,7 +283,7 @@ router.post('/auth/verify', async (req, res) => {
       expectedOrigin: origin,
       expectedRPID: rpID,
       credential: {
-        id: passkey.id,
+        id: isoBase64URL.toBuffer(passkey.id),
         publicKey: passkey.publicKey,
         counter: passkey.counter,
         transports: passkey.transports,
@@ -209,6 +295,9 @@ router.post('/auth/verify', async (req, res) => {
     if (verified) {
       // Update counter
       passkey.counter = authenticationInfo.newCounter;
+      
+      // Save updated counter to file
+      savePasskeys();
 
       // Create session
       req.session.authenticated = true;
@@ -245,7 +334,7 @@ router.get('/list', (req, res) => {
     const userCredentials = userPasskeys.get(username) || [];
 
     const passkeyList = userCredentials.map((cred, index) => ({
-      id: Buffer.from(cred.id).toString('base64url'),
+      id: cred.id, // Already a base64url string
       createdAt: cred.createdAt,
       transports: cred.transports,
       name: `Passkey ${index + 1}`,
@@ -269,9 +358,7 @@ router.delete('/:id', (req, res) => {
     const passkeyId = req.params.id;
     const userCredentials = userPasskeys.get(username) || [];
 
-    const index = userCredentials.findIndex(cred => 
-      Buffer.from(cred.id).toString('base64url') === passkeyId
-    );
+    const index = userCredentials.findIndex(cred => cred.id === passkeyId);
 
     if (index === -1) {
       return res.status(404).json({ error: 'Passkey not found' });
@@ -279,6 +366,9 @@ router.delete('/:id', (req, res) => {
 
     userCredentials.splice(index, 1);
     userPasskeys.set(username, userCredentials);
+
+    // Save to file
+    savePasskeys();
 
     res.json({ success: true, message: 'Passkey removed successfully' });
   } catch (error) {

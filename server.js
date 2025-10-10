@@ -73,10 +73,19 @@ const passkeyRoutes = require('./routes/passkey');
 app.use('/api/mail', mailRoutes);
 
 // CSRF protection middleware (applies to routes below)
-app.use(csrf({
-  header: 'x-csrf-token', // Accept CSRF token from x-csrf-token header
-  cookie: '_csrf' // Use a separate cookie for CSRF token
-}));
+// Skip CSRF for passkey authentication endpoints
+app.use((req, res, next) => {
+  // Skip CSRF for passkey auth endpoints (login flow)
+  if (req.path.startsWith('/api/passkey/auth')) {
+    return next();
+  }
+  
+  // Apply CSRF protection
+  csrf({
+    header: 'x-csrf-token',
+    cookie: '_csrf'
+  })(req, res, next);
+});
 
 // CSRF token endpoint
 app.get('/api/csrf-token', (req, res) => {
