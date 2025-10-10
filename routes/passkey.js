@@ -6,15 +6,11 @@ const {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } = require('@simplewebauthn/server');
+const { isoUint8Array, isoBase64URL } = require('@simplewebauthn/server/helpers');
 
 // In-memory storage for passkey credentials (in production, use a database)
 const userPasskeys = new Map();
 const challenges = new Map();
-
-// Helper to convert string to Uint8Array for userID
-function stringToUint8Array(str) {
-  return new Uint8Array(Buffer.from(str, 'utf8'));
-}
 
 // Configuration
 const rpName = 'josephhansen.dev API';
@@ -24,22 +20,30 @@ const origin = process.env.NODE_ENV === 'production'
   : `http://localhost:${process.env.PORT || 9640}`;
 
 // POST /api/passkey/register/options - Generate registration options
-router.post('/register/options', (req, res) => {
+router.post('/register/options', async (req, res) => {
+  console.log('=== Passkey Registration Options Request ===');
+  console.log('Session:', req.session);
+  console.log('Session authenticated:', req.session?.authenticated);
+  console.log('Username:', req.session?.username);
+  
   try {
     // Only allow authenticated users to register passkeys
     if (!req.session || !req.session.authenticated) {
+      console.log('❌ Not authenticated');
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
     const username = req.session.username || 'admin';
+    console.log('✓ Generating options for user:', username);
     
     // Get user's existing passkeys
     const userCredentials = userPasskeys.get(username) || [];
+    console.log('Existing passkeys:', userCredentials.length);
 
-    const options = generateRegistrationOptions({
+    const options = await generateRegistrationOptions({
       rpName,
       rpID,
-      userID: stringToUint8Array(username),
+      userID: isoUint8Array.fromUTF8String(username),
       userName: username,
       userDisplayName: username,
       // Don't prompt users for additional information about the authenticator
@@ -59,13 +63,19 @@ router.post('/register/options', (req, res) => {
       },
     });
 
+    console.log('✓ Options generated:', JSON.stringify(options, null, 2));
+    console.log('Challenge:', options.challenge);
+    console.log('User:', options.user);
+
     // Store challenge for verification
     challenges.set(username, options.challenge);
 
+    console.log('✓ Sending options to client');
     res.json(options);
   } catch (error) {
-    console.error('Passkey registration options error:', error);
-    res.status(500).json({ error: 'Failed to generate registration options' });
+    console.error('❌ Passkey registration options error:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ error: 'Failed to generate registration options', details: error.message });
   }
 });
 
@@ -93,17 +103,19 @@ router.post('/register/verify', async (req, res) => {
     const { verified, registrationInfo } = verification;
 
     if (verified && registrationInfo) {
-      const { credentialPublicKey, credentialID, counter } = registrationInfo;
+      const { credential, credentialDeviceType, credentialBackedUp } = registrationInfo;
 
       // Get or create user's passkey list
       const userCredentials = userPasskeys.get(username) || [];
       
-      // Add new passkey
+      // Add new passkey (using properties from credential)
       const newPasskey = {
-        id: credentialID,
-        publicKey: credentialPublicKey,
-        counter,
-        transports: req.body.response.transports || [],
+        id: credential.id,
+        publicKey: credential.publicKey,
+        counter: credential.counter,
+        transports: credential.transports || [],
+        deviceType: credentialDeviceType,
+        backedUp: credentialBackedUp,
         createdAt: new Date().toISOString(),
       };
 
@@ -129,7 +141,7 @@ router.post('/register/verify', async (req, res) => {
 });
 
 // POST /api/passkey/auth/options - Generate authentication options
-router.post('/auth/options', (req, res) => {
+router.post('/auth/options', async (req, res) => {
   try {
     const username = req.body.username || 'admin';
     const userCredentials = userPasskeys.get(username) || [];
@@ -138,7 +150,7 @@ router.post('/auth/options', (req, res) => {
       return res.status(404).json({ error: 'No passkeys registered for this user' });
     }
 
-    const options = generateAuthenticationOptions({
+    const options = await generateAuthenticationOptions({
       rpID,
       allowCredentials: userCredentials.map(cred => ({
         id: cred.id,
@@ -184,10 +196,11 @@ router.post('/auth/verify', async (req, res) => {
       expectedChallenge,
       expectedOrigin: origin,
       expectedRPID: rpID,
-      authenticator: {
-        credentialID: passkey.id,
-        credentialPublicKey: passkey.publicKey,
+      credential: {
+        id: passkey.id,
+        publicKey: passkey.publicKey,
         counter: passkey.counter,
+        transports: passkey.transports,
       },
     });
 

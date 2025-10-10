@@ -9,16 +9,8 @@ const csrf = require('lusca').csrf;
 const app = express();
 const PORT = process.env.PORT || 9640;
 
-// Trust proxy for production deployment (behind reverse proxy/load balancer)
-if (process.env.NODE_ENV === 'production') {
-  // Only trust first proxy for security
-  app.set('trust proxy', 1);
-} else {
-  // For development, only enable if explicitly needed
-  if (process.env.TRUST_PROXY === 'true') {
-    app.set('trust proxy', true);
-  }
-}
+// Trust proxy - always enable to work with rate limiting
+app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet({
@@ -26,7 +18,7 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
       scriptSrcAttr: ["'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:"],
       mediaSrc: ["'self'", "data:", "blob:"],
@@ -81,7 +73,10 @@ const passkeyRoutes = require('./routes/passkey');
 app.use('/api/mail', mailRoutes);
 
 // CSRF protection middleware (applies to routes below)
-app.use(csrf());
+app.use(csrf({
+  header: 'x-csrf-token', // Accept CSRF token from x-csrf-token header
+  cookie: '_csrf' // Use a separate cookie for CSRF token
+}));
 
 // CSRF token endpoint
 app.get('/api/csrf-token', (req, res) => {

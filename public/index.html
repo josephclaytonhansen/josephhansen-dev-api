@@ -319,63 +319,26 @@
 			<div id="alert-container"></div>
 		</div>
 
+		<!-- SimpleWebAuthn Browser Library - Using ESM bundle -->
+		<script type="module">
+			import * as SimpleWebAuthnBrowser from "https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.js"
+			window.SimpleWebAuthnBrowser = SimpleWebAuthnBrowser
+			console.log("SimpleWebAuthnBrowser loaded:", window.SimpleWebAuthnBrowser)
+
+			// Signal that the library is loaded
+			window.dispatchEvent(new Event("simplewebauthn-loaded"))
+		</script>
+
 		<script>
 			let selectedFiles = []
 			let currentImageId = null
+			let simpleWebAuthnReady = false
 
-			// Import SimpleWebAuthn browser helpers
-			const SimpleWebAuthnBrowser = {
-				startRegistration: async (options) => {
-					return await navigator.credentials.create({
-						publicKey: {
-							...options,
-							challenge: Uint8Array.from(
-								atob(options.challenge.replace(/-/g, "+").replace(/_/g, "/")),
-								(c) => c.charCodeAt(0)
-							),
-							user: {
-								...options.user,
-								id: Uint8Array.from(atob(options.user.id.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
-									c.charCodeAt(0)
-								),
-							},
-							excludeCredentials: options.excludeCredentials?.map((cred) => ({
-								...cred,
-								id: Uint8Array.from(atob(cred.id.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
-									c.charCodeAt(0)
-								),
-							})),
-						},
-					})
-				},
-				startAuthentication: async (options) => {
-					return await navigator.credentials.get({
-						publicKey: {
-							...options,
-							challenge: Uint8Array.from(
-								atob(options.challenge.replace(/-/g, "+").replace(/_/g, "/")),
-								(c) => c.charCodeAt(0)
-							),
-							allowCredentials: options.allowCredentials?.map((cred) => ({
-								...cred,
-								id: Uint8Array.from(atob(cred.id.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
-									c.charCodeAt(0)
-								),
-							})),
-						},
-					})
-				},
-			}
-
-			// Convert ArrayBuffer to base64url
-			function arrayBufferToBase64Url(buffer) {
-				const bytes = new Uint8Array(buffer)
-				let binary = ""
-				for (let i = 0; i < bytes.byteLength; i++) {
-					binary += String.fromCharCode(bytes[i])
-				}
-				return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
-			}
+			// Wait for SimpleWebAuthn to load
+			window.addEventListener("simplewebauthn-loaded", () => {
+				console.log("SimpleWebAuthn ready to use")
+				simpleWebAuthnReady = true
+			})
 
 			// Check authentication status on load
 			window.onload = async function () {
@@ -759,24 +722,11 @@
 						body: JSON.stringify({ username }),
 					})
 
-					// Start authentication
-					const credential = await SimpleWebAuthnBrowser.startAuthentication(options)
+					// Start authentication with SimpleWebAuthn library (handles conversion automatically)
+					const authResponse = await window.SimpleWebAuthnBrowser.startAuthentication(options)
 
-					// Format response
-					const authResponse = {
-						id: credential.id,
-						rawId: arrayBufferToBase64Url(credential.rawId),
-						type: credential.type,
-						response: {
-							authenticatorData: arrayBufferToBase64Url(credential.response.authenticatorData),
-							clientDataJSON: arrayBufferToBase64Url(credential.response.clientDataJSON),
-							signature: arrayBufferToBase64Url(credential.response.signature),
-							userHandle: credential.response.userHandle
-								? arrayBufferToBase64Url(credential.response.userHandle)
-								: undefined,
-						},
-						username,
-					}
+					// Add username to response
+					authResponse.username = username
 
 					// Verify authentication
 					await apiCall("/api/passkey/auth/verify", {
@@ -798,27 +748,43 @@
 			// Register new passkey
 			async function registerPasskey() {
 				try {
+					// Wait for SimpleWebAuthn library to be available
+					if (!simpleWebAuthnReady) {
+						showAlert("Loading security library, please wait...", "info")
+						await new Promise((resolve) => {
+							const checkInterval = setInterval(() => {
+								if (simpleWebAuthnReady) {
+									clearInterval(checkInterval)
+									resolve()
+								}
+							}, 100)
+							// Timeout after 5 seconds
+							setTimeout(() => {
+								clearInterval(checkInterval)
+								resolve()
+							}, 5000)
+						})
+					}
+
+					if (!window.SimpleWebAuthnBrowser) {
+						throw new Error("Security library failed to load. Please refresh the page.")
+					}
+
 					showAlert("Touch your security key or use Windows Hello...", "info")
+
+					console.log("Starting passkey registration...")
 
 					// Get registration options from server
 					const options = await apiCall("/api/passkey/register/options", {
 						method: "POST",
 					})
 
-					// Start registration
-					const credential = await SimpleWebAuthnBrowser.startRegistration(options)
+					console.log("Got options from server:", options)
 
-					// Format response
-					const regResponse = {
-						id: credential.id,
-						rawId: arrayBufferToBase64Url(credential.rawId),
-						type: credential.type,
-						response: {
-							attestationObject: arrayBufferToBase64Url(credential.response.attestationObject),
-							clientDataJSON: arrayBufferToBase64Url(credential.response.clientDataJSON),
-						},
-						transports: credential.response.getTransports ? credential.response.getTransports() : [],
-					}
+					// Start registration with SimpleWebAuthn library (handles conversion automatically)
+					console.log("Calling startRegistration...")
+					const regResponse = await window.SimpleWebAuthnBrowser.startRegistration(options)
+					console.log("Got registration response:", regResponse)
 
 					// Verify registration
 					await apiCall("/api/passkey/register/verify", {
@@ -829,6 +795,7 @@
 					showAlert("Passkey registered successfully! You can now use it to log in.", "success")
 					loadPasskeys()
 				} catch (error) {
+					console.error("Passkey registration error:", error)
 					if (error.name === "NotAllowedError") {
 						showAlert("Registration cancelled or failed", "error")
 					} else {
